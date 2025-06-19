@@ -9,6 +9,9 @@ import os
 import traceback
 from typing import List, Tuple, Dict, Any, Optional
 
+# Music player has been removed, we'll handle music directly
+MusicPlayer = None
+
 # For smooth transitions
 from pygame.locals import *
 
@@ -2745,6 +2748,10 @@ class SettingsMenu:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 return "EXIT"
+            # Handle music end event - play next song in playlist
+            elif event.type == pygame.USEREVENT + 1:
+                if hasattr(self, "_advance_playlist"):
+                    self._advance_playlist()
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     return "BACK"
@@ -3948,6 +3955,10 @@ class PromptSystem:
 
     def handle_input(self, event):
         """Handle input for dismissing prompts"""
+        # Don't consume scroll events
+        if event.type == pygame.MOUSEBUTTONDOWN and (event.button == 4 or event.button == 5):
+            return False
+            
         if event.type == pygame.KEYDOWN and event.key == pygame.K_x:
             if self.active_prompts:
                 # Start fade out for all prompts
@@ -3986,6 +3997,9 @@ class Game:
             )
             pygame.display.set_caption("Car Racing Game")
             self.clock = pygame.time.Clock()
+            
+            # Music player has been removed, we'll handle music directly
+            self.music_player = None
             
             # Track window state
             self.is_maximized = True
@@ -4478,33 +4492,42 @@ class Game:
             return False
             
     def play_background_music(self):
-        """Play background music in a loop"""
+        """Play background music in a loop using track_01.mp3"""
         try:
             if sound_enabled and music_enabled and pygame.mixer.get_init():
-                # Initialize music playlist
-                self.music_playlist = []
-                self.current_music_index = 0
+                # Use track_01.mp3 as the background music
+                track_01_path = "sounds/music/track_01.mp3"
                 
-                # Find all music files in the music directory
-                music_dir = "sounds/music"
-                if os.path.exists(music_dir):
-                    for file in sorted(os.listdir(music_dir)):
-                        if file.endswith(".mp3") or file.endswith(".wav"):
-                            self.music_playlist.append(os.path.join(music_dir, file))
-                
-                # If no music files found in music directory, use the default background music
-                if not self.music_playlist and os.path.exists(self.SOUND_BACKGROUND_MUSIC):
-                    self.music_playlist.append(self.SOUND_BACKGROUND_MUSIC)
-                
-                # Start playing the first song if playlist is not empty
-                if self.music_playlist:
-                    self._play_next_song()
+                if os.path.exists(track_01_path) and os.path.getsize(track_01_path) > 1000:
+                    print("Starting background music with track_01.mp3...")
+                    pygame.mixer.music.load(track_01_path)
+                    pygame.mixer.music.set_volume(0.3)  # Set volume to 30%
+                    pygame.mixer.music.play(-1)  # -1 means loop indefinitely
+                    print("Background music started with track_01.mp3")
                     return True
                 else:
-                    print("No music files found")
+                    # Fallback to default background music if track_01.mp3 is not available
+                    if os.path.exists(self.SOUND_BACKGROUND_MUSIC) and os.path.getsize(self.SOUND_BACKGROUND_MUSIC) > 1000:
+                        print("Track_01.mp3 not found, using fallback background music...")
+                        pygame.mixer.music.load(self.SOUND_BACKGROUND_MUSIC)
+                        pygame.mixer.music.set_volume(0.3)  # Set volume to 30%
+                        pygame.mixer.music.play(-1)  # -1 means loop indefinitely
+                        print("Background music started (fallback mode)")
+                        return True
             return False
         except Exception as e:
             print(f"Error playing background music: {e}")
+            traceback.print_exc()
+            return False
+            
+    def stop_background_music(self):
+        """Stop the background music"""
+        try:
+            if pygame.mixer.get_init() and pygame.mixer.music.get_busy():
+                pygame.mixer.music.stop()
+                print("Background music stopped")
+        except Exception as e:
+            print(f"Error stopping background music: {e}")
             traceback.print_exc()
             return False
     
@@ -5565,9 +5588,9 @@ class Game:
             self.transition.start(direction="in", duration=0.5)
         
         # Font sizes - increased for better visibility
-        title_font_size = int(48 * (screen_height / 720))
-        heading_font_size = int(32 * (screen_height / 720))
-        text_font_size = int(24 * (screen_height / 720))
+        title_font_size = int(64 * (screen_height / 720))  # Increased from 48 to 64
+        heading_font_size = int(36 * (screen_height / 720))  # Increased from 32 to 36
+        text_font_size = int(26 * (screen_height / 720))  # Increased from 24 to 26
         
         # Enhanced colors for better visibility and attractiveness
         title_color = (255, 215, 0)  # Gold
@@ -5581,7 +5604,7 @@ class Game:
             "🎮": (200, 150, 255),  # Purple for Game Modes
         }
         text_color = (255, 255, 255)  # White
-        text_highlight_color = (220, 220, 150)  # Light yellow for highlights
+        text_highlight_color = (255, 255, 150)  # Brighter light yellow for highlights
         back_button_color = (60, 60, 80)
         back_button_hover_color = (80, 80, 120)
         
@@ -5672,9 +5695,11 @@ class Game:
         ]
         
         # Scrolling
-        scroll_y = 0
+        if not hasattr(self, 'updates_menu_scroll_y'):
+            self.updates_menu_scroll_y = 0
+        scroll_y = self.updates_menu_scroll_y
         max_scroll = 0  # Will be calculated when drawing
-        scroll_speed = 30
+        scroll_speed = 15  # Reduced scroll speed for smoother scrolling
         
         # Main updates menu loop
         clock = pygame.time.Clock()
@@ -5701,90 +5726,206 @@ class Game:
                     pygame.draw.rect(overlay, color, (0, y_pos, screen_width, height))
                 self.screen.blit(overlay, (0, 0))
                 
-                # Draw decorative elements - animated lines
-                for i in range(5):
-                    y_offset = (screen_height // 6) * i
-                    line_alpha = 40 + int(20 * math.sin(animation_time * 0.5 + i * 0.3))
-                    line_color = (100, 150, 255, line_alpha)
-                    pygame.draw.line(self.screen, line_color, 
-                                    (0, y_offset), 
-                                    (screen_width, y_offset + 100),
-                                    2)
+                # Decorative elements removed as requested
                 
-                # Draw title with glow effect
+                # Draw title with enhanced glow and animation effects
                 title_font = pygame.font.SysFont("Arial", title_font_size, bold=True)
                 
-                # Draw glow
-                glow_size = 3
-                for offset in range(glow_size, 0, -1):
-                    glow_alpha = 100 - offset * 30
-                    glow_color = (255, 215, 0, glow_alpha)
-                    glow_text = title_font.render("Upcoming Updates", True, glow_color)
-                    glow_rect = glow_text.get_rect(center=(screen_width // 2 + offset, 50))
-                    self.screen.blit(glow_text, glow_rect)
-                    glow_rect = glow_text.get_rect(center=(screen_width // 2 - offset, 50))
-                    self.screen.blit(glow_text, glow_rect)
-                    glow_rect = glow_text.get_rect(center=(screen_width // 2, 50 + offset))
-                    self.screen.blit(glow_text, glow_rect)
-                    glow_rect = glow_text.get_rect(center=(screen_width // 2, 50 - offset))
-                    self.screen.blit(glow_text, glow_rect)
+                # Create a background banner for the title
+                banner_height = 100
+                banner_rect = pygame.Rect(0, 30, screen_width, banner_height)
+                banner_surface = pygame.Surface((screen_width, banner_height), pygame.SRCALPHA)
                 
-                # Draw main title
-                title_text = title_font.render("Upcoming Updates", True, title_color)
-                title_rect = title_text.get_rect(center=(screen_width // 2, 70))  # Moved from 50 to 70
+                # Create gradient banner with animation
+                for i in range(banner_height):
+                    alpha = 150 - int(i * 1.2)
+                    if alpha < 0:
+                        alpha = 0
+                    # Animated color with time
+                    r = 30 + int(20 * math.sin(animation_time * 0.5))
+                    g = 30 + int(10 * math.sin(animation_time * 0.7 + 2))
+                    b = 80 + int(30 * math.sin(animation_time * 0.3 + 4))
+                    pygame.draw.line(
+                        banner_surface, 
+                        (r, g, b, alpha),
+                        (0, i),
+                        (screen_width, i)
+                    )
+                
+                # Add animated particles to the banner
+                for i in range(20):
+                    particle_x = (screen_width * 0.5) + (screen_width * 0.4) * math.cos(animation_time * 0.2 + i * 0.3)
+                    particle_y = banner_height * 0.5 + (banner_height * 0.3) * math.sin(animation_time * 0.3 + i * 0.2)
+                    particle_size = 2 + int(2 * math.sin(animation_time + i))
+                    particle_alpha = 100 + int(100 * math.sin(animation_time * 0.5 + i * 0.7))
+                    pygame.draw.circle(
+                        banner_surface,
+                        (255, 255, 255, particle_alpha),
+                        (int(particle_x), int(particle_y)),
+                        particle_size
+                    )
+                
+                self.screen.blit(banner_surface, banner_rect)
+                
+                # Draw enhanced glow effect for title
+                glow_size = 5  # Increased from 3 to 5
+                glow_intensity = 1.5 + 0.5 * math.sin(animation_time * 2)  # Pulsating glow
+                for offset in range(glow_size, 0, -1):
+                    glow_alpha = int((120 - offset * 20) * glow_intensity)
+                    if glow_alpha > 255:
+                        glow_alpha = 255
+                    glow_color = (255, 215, 0, glow_alpha)
+                    glow_text = title_font.render("UPCOMING UPDATES", True, glow_color)  # Changed to all caps
+                    
+                    # More dramatic glow spread
+                    offsets = [
+                        (offset * 1.5, 0),
+                        (-offset * 1.5, 0),
+                        (0, offset * 1.5),
+                        (0, -offset * 1.5),
+                        (offset, offset),
+                        (-offset, -offset),
+                        (offset, -offset),
+                        (-offset, offset)
+                    ]
+                    
+                    for x_off, y_off in offsets:
+                        glow_rect = glow_text.get_rect(center=(screen_width // 2 + x_off, 63 + y_off))  # Adjusted from 70 to 63
+                        self.screen.blit(glow_text, glow_rect)
+                
+                # Draw main title with shadow for depth
+                shadow_text = title_font.render("UPCOMING UPDATES", True, (0, 0, 0, 180))
+                shadow_rect = shadow_text.get_rect(center=(screen_width // 2 + 3, 63))  # Adjusted from 73 to 63
+                self.screen.blit(shadow_text, shadow_rect)
+                
+                # Main title with slight animation
+                title_y_offset = math.sin(animation_time * 2) * 2
+                title_text = title_font.render("UPCOMING UPDATES", True, title_color)
+                title_rect = title_text.get_rect(center=(screen_width // 2, 60 + title_y_offset))  # Decreased Y position from 70 to 60
                 self.screen.blit(title_text, title_rect)
+                
+                # Add subtitle with increased vertical spacing
+                subtitle_font = pygame.font.SysFont("Arial", int(title_font_size * 0.4), italic=True)
+                subtitle_text = subtitle_font.render("Exciting new features coming soon!", True, (200, 200, 255))
+                subtitle_rect = subtitle_text.get_rect(center=(screen_width // 2, 130))  # Increased Y position from 110 to 130
+                self.screen.blit(subtitle_text, subtitle_rect)
                 
                 # Draw content with scrolling
                 heading_font = pygame.font.SysFont("Arial", heading_font_size, bold=True)
-                text_font = pygame.font.SysFont("Arial", text_font_size)
+                text_font = pygame.font.SysFont("Arial", text_font_size + 2)  # Slightly larger text
                 
-                y_pos = 140 + scroll_y  # Increased starting position from 120 to 140
+                y_pos = 180 + scroll_y  # Increased starting position from 160 to 180 to accommodate subtitle
                 content_height = 0
                 
-                # Content area with decorative border - adjusted to start lower
-                content_area = pygame.Rect(50, 120, screen_width - 100, screen_height - 200)
+                # Content area with enhanced decorative border - better proportioned
+                content_area = pygame.Rect(180, 160, screen_width - 360, screen_height - 240)  # More balanced padding
                 
-                # Draw decorative border for content area
+                # Draw decorative content area background with animated border
                 border_color = (100, 150, 200, 100)
-                pygame.draw.rect(self.screen, border_color, content_area, 2, border_radius=10)
+                
+                # Create animated border
+                border_width = 3  # Increased from 2 to 3
+                border_pulse = (math.sin(animation_time * 2) + 1) / 2  # Value between 0 and 1
+                border_alpha = int(100 + 100 * border_pulse)  # Pulsing transparency
+                
+                # Draw outer glow for content area
+                for i in range(5, 0, -1):
+                    glow_alpha = int(20 * (6-i) * border_pulse)
+                    glow_rect = content_area.copy()
+                    glow_rect.inflate_ip(i*2, i*2)
+                    pygame.draw.rect(self.screen, (100, 150, 255, glow_alpha), glow_rect, border_radius=15)
+                
+                # Draw main border with animation
+                pygame.draw.rect(self.screen, (border_color[0], border_color[1], border_color[2], border_alpha), 
+                                content_area, border_width, border_radius=15)
+                
+                # Set clipping region to content area to ensure text stays within the box
+                # Make the clipping region slightly larger vertically to allow for partial text rendering
+                clip_rect = content_area.copy()
+                clip_rect.y -= 15  # Extend 15 pixels above
+                clip_rect.height += 30  # Extend 15 pixels below
+                original_clip = self.screen.get_clip()
+                self.screen.set_clip(clip_rect)
+                
+                # Add decorative corner accents
+                corner_size = 20
+                corner_positions = [
+                    (content_area.left, content_area.top),  # Top-left
+                    (content_area.right, content_area.top),  # Top-right
+                    (content_area.left, content_area.bottom),  # Bottom-left
+                    (content_area.right, content_area.bottom)  # Bottom-right
+                ]
+                
+                for x, y in corner_positions:
+                    # Draw corner accent with animation
+                    accent_color = (200, 220, 255, border_alpha)
+                    if (x == content_area.left and y == content_area.top) or (x == content_area.right and y == content_area.bottom):
+                        # Top-left and bottom-right corners
+                        pygame.draw.line(self.screen, accent_color, (x, y), (x + (corner_size if x == content_area.left else -corner_size), y), border_width)
+                        pygame.draw.line(self.screen, accent_color, (x, y), (x, y + (corner_size if y == content_area.top else -corner_size)), border_width)
+                    else:
+                        # Top-right and bottom-left corners
+                        pygame.draw.line(self.screen, accent_color, (x, y), (x + (corner_size if x == content_area.left else -corner_size), y), border_width)
+                        pygame.draw.line(self.screen, accent_color, (x, y), (x, y + (corner_size if y == content_area.top else -corner_size)), border_width)
                 
                 for section in updates_content:
                     # Get the emoji from the section text to determine color
                     emoji = section["text"].split()[0]
                     heading_color = heading_colors.get(emoji, (135, 206, 250))  # Default to light sky blue
                     
-                    # Draw section heading with background
-                    heading_text = heading_font.render(section["text"], True, heading_color)
-                    heading_rect = heading_text.get_rect(x=70, y=y_pos)
+                    # Draw section heading with enhanced background - SIMPLIFIED VERSION
+                    # Calculate available width for heading
+                    available_width = content_area.width - 100
                     
-                    # Only draw if in view
-                    if content_area.colliderect(heading_rect):
+                    # Get the emoji from the section text
+                    emoji = section["text"].split()[0]
+                    heading_text_without_emoji = " ".join(section["text"].split()[1:])
+                    
+                    # Truncate heading text if needed
+                    test_heading = heading_font.render(heading_text_without_emoji, True, heading_color)
+                    if test_heading.get_width() > available_width:
+                        # Calculate how many characters we can fit
+                        char_ratio = available_width / test_heading.get_width()
+                        max_chars = max(5, int(len(heading_text_without_emoji) * char_ratio) - 3)
+                        heading_text_without_emoji = heading_text_without_emoji[:max_chars] + "..."
+                    
+                    # Render final heading with emoji
+                    heading_text = heading_font.render(emoji + " " + heading_text_without_emoji, True, heading_color)
+                    heading_rect = heading_text.get_rect(x=content_area.x + 60, y=y_pos)
+                    
+                    # Only draw if at least partially in view vertically
+                    # More lenient check - draw if any part of the heading is in the content area vertically
+                    if (y_pos + heading_rect.height > content_area.top - 10 and 
+                        y_pos < content_area.bottom + 10):
                         # Draw heading background
                         bg_rect = heading_rect.copy()
-                        bg_rect.inflate_ip(20, 10)
-                        bg_rect.x -= 10
+                        bg_rect.inflate_ip(30, 15)
+                        bg_rect.x -= 15
                         
-                        # Create gradient background for heading
+                        # Make sure background stays within content area
+                        if bg_rect.right > content_area.right - 20:
+                            bg_rect.width = content_area.right - bg_rect.x - 20
+                        
+                        # Create simple background for heading
                         heading_bg = pygame.Surface((bg_rect.width, bg_rect.height), pygame.SRCALPHA)
-                        for i in range(bg_rect.height):
-                            alpha = 100 - i
-                            if alpha < 0:
-                                alpha = 0
-                            pygame.draw.line(
-                                heading_bg, 
-                                (heading_color[0], heading_color[1], heading_color[2], alpha),
-                                (0, i),
-                                (bg_rect.width, i)
-                            )
+                        heading_bg.fill((heading_color[0], heading_color[1], heading_color[2], 50))
                         
+                        # Draw heading background
                         self.screen.blit(heading_bg, bg_rect)
+                        
+                        # Draw heading text with shadow for depth
+                        shadow_text = heading_font.render(emoji + " " + heading_text_without_emoji, True, (0, 0, 0, 150))
+                        shadow_rect = shadow_text.get_rect(x=heading_rect.x + 2, y=heading_rect.y + 2)
+                        self.screen.blit(shadow_text, shadow_rect)
+                        
+                        # Draw main heading text
                         self.screen.blit(heading_text, heading_rect)
                     
-                    y_pos += heading_rect.height + 20  # Increased spacing after headings from 10 to 20
-                    content_height += heading_rect.height + 20
+                    y_pos += heading_rect.height + 25  # Increased spacing after headings from 20 to 25
+                    content_height += heading_rect.height + 25
                     
-                    # Draw section items with improved styling
-                    for item in section["items"]:
+                    # Draw section items with enhanced styling
+                    for item_index, item in enumerate(section["items"]):
                         # Wrap text to fit within content area width
                         words = item.split()
                         lines = []
@@ -5808,7 +5949,7 @@ class Game:
                             test_line = " ".join(current_line + [word])
                             test_width = text_font.size(test_line)[0]
                             
-                            if test_width < screen_width - 160:  # Slightly narrower for better readability
+                            if test_width < screen_width - 500:  # More reasonable width limit
                                 current_line.append(word)
                             else:
                                 lines.append(" ".join(current_line))
@@ -5817,7 +5958,24 @@ class Game:
                         if current_line:
                             lines.append(" ".join(current_line))
                         
-                        # Draw each line with improved styling
+                        # Create item background with subtle animation
+                        item_height = sum([text_font.size(line)[1] for line in lines]) + 8 * (len(lines) - 1) + 15
+                        item_rect = pygame.Rect(200, y_pos - 5, screen_width - 480, item_height)  # Better proportioned width
+                        
+                        # Only draw if at least partially in view
+                        if (item_rect.bottom > content_area.top - 15 and 
+                            item_rect.top < content_area.bottom + 15):
+                            # Alternate background colors for better readability
+                            if item_index % 2 == 0:
+                                # Create subtle animated background
+                                item_alpha = 10 + int(5 * math.sin(animation_time + item_index * 0.2))
+                                pygame.draw.rect(self.screen, (*heading_color, item_alpha), item_rect, border_radius=8)
+                                
+                                # Add subtle border
+                                border_alpha = 20 + int(10 * math.sin(animation_time * 1.5 + item_index * 0.3))
+                                pygame.draw.rect(self.screen, (*heading_color, border_alpha), item_rect, 1, border_radius=8)
+                        
+                        # Draw each line with improved styling - SIMPLIFIED VERSION
                         first_line = True
                         for line in lines:
                             # Determine if this is the feature name (first line when split)
@@ -5826,30 +5984,60 @@ class Game:
                             # Choose color based on whether it's a feature name
                             line_color = text_highlight_color if is_feature_name else text_color
                             
-                            # Create text surface with appropriate color
+                            # Set position based on whether this is first line or continuation
+                            x_position = 200 if first_line else 220
+                            
+                            # HARD LIMIT: Truncate text to fixed maximum width
+                            # Calculate available width within content area
+                            available_width = content_area.right - x_position - 100
+                            
+                            # Render text to check its width
+                            test_surface = text_font.render(line, True, line_color)
+                            
+                            # If text is too wide, truncate it
+                            if test_surface.get_width() > available_width:
+                                # Always truncate if too wide
+                                char_ratio = available_width / test_surface.get_width()
+                                max_chars = max(5, int(len(line) * char_ratio) - 3)
+                                line = line[:max_chars] + "..."
+                            
+                            # Create final text surface
                             text_surface = text_font.render(line, True, line_color)
-                            
-                            # Add bullet point for first line
-                            x_position = 90
-                            if first_line:
-                                # Draw bullet point
-                                bullet_color = heading_color
-                                pygame.draw.circle(self.screen, bullet_color, (x_position - 10, y_pos + text_surface.get_height()//2), 4)
-                            else:
-                                # Indent continuation lines
-                                x_position = 100
-                            
                             text_rect = text_surface.get_rect(x=x_position, y=y_pos)
                             
-                            # Only draw if in view
-                            if content_area.colliderect(text_rect):
+                            # Double-check that text is within content area horizontally
+                            if text_rect.right > content_area.right - 20:
+                                # If still too wide, skip this line
+                                continue
+                            
+                            # Only draw if at least partially in view vertically
+                            # More lenient check - draw if any part of the text is in the content area vertically
+                            if (y_pos + text_rect.height > content_area.top - 10 and 
+                                y_pos < content_area.bottom + 10):
+                                # Draw text with subtle shadow for feature names
+                                if is_feature_name:
+                                    shadow_surface = text_font.render(line, True, (0, 0, 0, 100))
+                                    shadow_rect = shadow_surface.get_rect(x=x_position + 1, y=y_pos + 1)
+                                    self.screen.blit(shadow_surface, shadow_rect)
+                                
+                                # Draw bullet point for first line
+                                if first_line:
+                                    bullet_color = heading_color
+                                    pygame.draw.circle(
+                                        self.screen, 
+                                        bullet_color,
+                                        (x_position - 10, y_pos + text_surface.get_height()//2),
+                                        4
+                                    )
+                                
+                                # Draw the text
                                 self.screen.blit(text_surface, text_rect)
                             
-                            y_pos += text_rect.height + 8  # Increased spacing between lines from 5 to 8
-                            content_height += text_rect.height + 8
+                            y_pos += text_rect.height + 10  # Increased line spacing
+                            content_height += text_rect.height + 10
                             first_line = False
                         
-                        y_pos += 15  # Increased spacing between items from 10 to 15
+                        y_pos += 20  # Increased spacing between items
                         content_height += 15
                     
                     y_pos += 30  # Increased space between sections from 20 to 30
@@ -5857,6 +6045,9 @@ class Game:
                 
                 # Calculate max scroll
                 max_scroll = min(0, screen_height - 180 - content_height)
+                
+                # Restore original clipping region before drawing back button and scrollbar
+                self.screen.set_clip(original_clip)
                 
                 # Draw back button with enhanced styling
                 back_color = back_button_hover_color if back_button_hover else back_button_color
@@ -5947,6 +6138,7 @@ class Game:
                         
                     # Add scroll bar indicator
                     if content_height > 0:
+                        
                         # Calculate scroll bar position and size
                         viewport_height = screen_height - 180
                         scroll_bar_height = max(30, viewport_height * (viewport_height / content_height))
@@ -6003,6 +6195,10 @@ class Game:
                 print(f"Error in updates menu: {e}")
                 traceback.print_exc()
                 return
+                
+        # Save scroll position for next time
+        self.updates_menu_scroll_y = scroll_y
+        return
     
     def show_settings_menu(self, background_surface):
         # Global variables that will be updated
@@ -8673,6 +8869,26 @@ class Game:
                 current_time = time.time()
                 dt = current_time - last_frame_time
                 last_frame_time = current_time
+                
+                # Handle all events in a single pass
+                events = pygame.event.get()
+                for event in events:
+                    # First priority: Handle music events
+                    if event.type == pygame.USEREVENT + 1:
+                        print("Music end event detected, restarting track_01.mp3")
+                        # Restart the background music
+                        self.play_background_music()
+                        continue
+                        
+                    # Second priority: Handle quit events
+                    if event.type == pygame.QUIT:
+                        # Stop background music
+                        self.stop_background_music()
+                        pygame.quit()
+                        sys.exit()
+                        
+                    # For all other events, re-post them for normal game handling
+                    pygame.event.post(event)
 
                 # Cap delta time to avoid large jumps
                 dt = min(dt, 0.1)
@@ -9454,3 +9670,10 @@ def draw_sparkles(self, surface):
                 (int(sparkle["x"]), int(sparkle["y"])),
                 sparkle["size"] * twinkle
             )
+    def handle_music_end_event(self, event):
+        """Handle music end event to play the next song"""
+        if event.type == pygame.USEREVENT + 1:
+            if hasattr(self, "_advance_playlist"):
+                self._advance_playlist()
+                return True
+        return False
